@@ -4,11 +4,20 @@ import {
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
+import { isIncognitoDiagnosticSession } from "./diagnostic-session-state.js";
 
 /** Diagnostics may request a tick, but never decide admission, cancel by ID or clear custody. */
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
+  // Keep privacy after the diagnostic alias retires during controller recovery.
+  const incognito = isIncognitoDiagnosticSession(params);
+  const reportOutcome = (outcome: StuckSessionRecoveryOutcome) => {
+    if (!incognito) {
+      diag.warn("stuck session recovery outcome: " + formatRecoveryOutcome(outcome));
+    }
+    return outcome;
+  };
   const operation = params.operation;
   const base = { sessionId: params.sessionId, sessionKey: params.sessionKey };
   if (!operation) {
@@ -49,9 +58,14 @@ export async function recoverStuckDiagnosticSession(
                     ? "stale_session_state"
                     : "active_reply_work",
             };
-    diag.warn("stuck session recovery outcome: " + formatRecoveryOutcome(outcome));
-    return outcome;
+    return reportOutcome(outcome);
   } catch (error) {
-    return { ...base, status: "failed", action: "none", reason: "exception", error: String(error) };
+    return reportOutcome({
+      ...base,
+      status: "failed",
+      action: "none",
+      reason: "exception",
+      error: String(error),
+    });
   }
 }

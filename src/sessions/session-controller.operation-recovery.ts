@@ -201,8 +201,11 @@ export function createReplyOperationRecovery(context: ReplyOperationRecoveryCont
       return context.isOwnerSettled() ? "settled" : "resumed";
     }
     if (workerFailure !== undefined) {
-      // Placement recovery recorded the terminal failure; its producer still owns cleanup.
-      return context.isOwnerSettled() ? "settled" : "blocked";
+      if (context.isOwnerSettled()) {
+        return "settled";
+      }
+      // Preserve the failure in watchdog diagnostics; its producer still owns cleanup.
+      throw new Error(workerFailure);
     }
     const cleanups = [...context.executionCleanups];
     const failures: unknown[] = [];

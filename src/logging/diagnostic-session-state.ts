@@ -1,3 +1,5 @@
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
 export type SessionState = {
@@ -205,6 +207,18 @@ function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
   return (
     diagnosticSessionStates.get(key) ??
     (ref.sessionId ? findStateEntryBySessionId(ref.sessionId)?.[1] : undefined)
+  );
+}
+
+/** Classify optional output without admitting new diagnostic state. */
+export function resolveDiagnosticSessionKey(ref: SessionRef): string | undefined {
+  return ref.sessionKey ?? peekDiagnosticSessionState(ref)?.sessionKey;
+}
+
+export function isIncognitoDiagnosticSession(ref: SessionRef): boolean {
+  return (
+    isIncognitoSessionKey(ref.sessionKey) ||
+    isIncognitoSessionKey(peekDiagnosticSessionState(ref)?.sessionKey)
   );
 }
 
