@@ -7,9 +7,10 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import * as subagentKillSettlement from "../agents/subagents/registry/subagent-control-kill-settlement.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
@@ -263,9 +264,23 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
   const releaseCleanup = createDeferred();
   const releaseStarted = createDeferred();
   const releaseFinished = createDeferred();
+  const sourceDrainStarted = createDeferred();
   let releaseCommitted = false;
   let stopResponse: Promise<KillResponse> | undefined;
   let drain: ReturnType<typeof createChannelIngressDrain> | undefined;
+  const settleSources = subagentKillSettlement.settleSubagentKillSources;
+  const sourceDrainSpy = vi
+    .spyOn(subagentKillSettlement, "settleSubagentKillSources")
+    .mockImplementation((params) => {
+      const pending = settleSources(params);
+      if (
+        childSessionKey !== undefined &&
+        params.cleanup?.inputs.some((input) => input.target?.sessionKey === childSessionKey)
+      ) {
+        sourceDrainStarted.resolve();
+      }
+      return pending;
+    });
   await runQaGatewayFixture(
     async () => {
       // Create the child through chat.send and discover its key only from the model
@@ -341,6 +356,13 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       vi.useFakeTimers({ toFake: ["setTimeout"] });
       stopResponse = postSubagentKill(gateway.port, childSessionKey);
       await releaseStarted.promise;
+      // Durable kill writes can finish after ingress release starts. Advance only
+      // once the real source-cleanup owner has armed its drain deadline.
+      await awaitGateBeforeSettlement(
+        sourceDrainStarted.promise,
+        stopResponse,
+        "Stop responded before joining the held source cleanup",
+      );
       await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS * 2 + 1);
       const settledResponse = await stopResponse;
       expect(settledResponse).toMatchObject({
@@ -390,6 +412,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
         await stopResponse.catch(() => undefined);
       }
     },
+    () => sourceDrainSpy.mockRestore(),
     () => drain?.dispose(),
     () => disconnectGatewayClient(gateway.client),
     async () => {
