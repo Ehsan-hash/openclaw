@@ -298,6 +298,7 @@ export function getSubagentRequesterSessionActivity(
   const sessionId = activeSessionId ?? storedSessionId;
   return {
     sessionId,
+    target,
     isActive: activeSessionId !== undefined,
   };
 }

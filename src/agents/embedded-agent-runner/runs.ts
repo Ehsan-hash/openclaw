@@ -18,7 +18,10 @@ import {
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
+import type {
+  SessionControllerEntry,
+  ReplyBackendHandle,
+} from "../../sessions/session-controller.contracts.js";
 import {
   abortActiveReplyRuns,
   resolveActiveReplyOperationForSessionId,
@@ -43,6 +46,10 @@ import {
   captureSessionControllerStop,
   stopSession,
 } from "../../sessions/session-controller.stop.js";
+import {
+  sessionTargetOwnersMatch,
+  type SessionTarget,
+} from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
@@ -66,9 +73,7 @@ import {
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   ACTIVE_EMBEDDED_RUNS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
-  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
-  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
-  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
+  ABANDONED_EMBEDDED_RUNS,
   EMBEDDED_RUN_COMPLETION_CLAIMS,
   EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS,
   type ActiveEmbeddedRunSnapshot,
@@ -87,43 +92,55 @@ export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from 
 
 export type EmbeddedRunTimeoutRecoveryMarker = AbandonedEmbeddedRun;
 
-function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
-  const abandonedRun = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId);
-  if (!abandonedRun) {
-    return;
-  }
-  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.delete(sessionId);
-  const clearIndex = (index: Map<string, string>, key: string | undefined) => {
-    if (key && index.get(key) === sessionId) {
-      index.delete(key);
-    }
-  };
-  clearIndex(ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY, abandonedRun.sessionKey?.trim());
-  clearIndex(
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
-    normalizeSessionFileRegistryKey(abandonedRun.sessionFile),
-  );
-}
-
-function clearEmbeddedRunAbandonment(params: {
+type AbandonmentOwner = SessionControllerEntry | string;
+type AbandonmentQuery = {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
-}): void {
-  const normalizedSessionId = params.sessionId?.trim();
-  if (normalizedSessionId) {
-    clearEmbeddedRunAbandonmentBySessionId(normalizedSessionId);
+  target?: SessionTarget;
+};
+
+function matchesAbandonment(
+  owner: AbandonmentOwner,
+  abandoned: AbandonedEmbeddedRun,
+  query: AbandonmentQuery,
+): boolean {
+  if (
+    query.target &&
+    (typeof owner === "string" ||
+      !owner.target ||
+      !sessionTargetOwnersMatch(owner.target, query.target))
+  ) {
+    return false;
   }
-  for (const [key, index] of [
-    [params.sessionKey?.trim(), ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY],
-    [
-      normalizeSessionFileRegistryKey(params.sessionFile),
-      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
-    ],
-  ] as const) {
-    const sessionId = key ? index.get(key) : undefined;
-    if (sessionId) {
-      clearEmbeddedRunAbandonmentBySessionId(sessionId);
+  const key = query.sessionKey?.trim() ?? query.target?.sessionKey;
+  const file = query.sessionFile;
+  return Boolean(
+    (query.sessionId?.trim() && abandoned.sessionId === query.sessionId.trim()) ||
+    (key &&
+      (abandoned.sessionKey === key ||
+        (typeof owner !== "string" && owner.logicalAliases.has(key)))) ||
+    (file && abandoned.sessionFile === file),
+  );
+}
+
+function clearEmbeddedRunAbandonment(owner: AbandonmentOwner, params: AbandonmentQuery): void {
+  const query = { ...params, sessionFile: normalizeSessionFileRegistryKey(params.sessionFile) };
+  for (const [previousOwner, abandoned] of ABANDONED_EMBEDDED_RUNS) {
+    // Idle entries are pruned. A successor may have a new entry and session ID,
+    // but only the same store/agent and logical key or file clears its timeout.
+    const sameScope =
+      typeof owner === "string"
+        ? typeof previousOwner === "string"
+        : typeof previousOwner !== "string" &&
+          (owner.target && previousOwner.target
+            ? sessionTargetOwnersMatch(owner.target, previousOwner.target)
+            : owner.target === previousOwner.target);
+    if (
+      previousOwner === owner ||
+      (sameScope && matchesAbandonment(previousOwner, abandoned, query))
+    ) {
+      ABANDONED_EMBEDDED_RUNS.delete(previousOwner);
     }
   }
 }
@@ -136,59 +153,43 @@ export function markActiveEmbeddedRunAbandoned(params: {
   reason: AbandonedEmbeddedRun["reason"];
 }): boolean {
   const sessionId = params.sessionId.trim();
-  if (!sessionId || getActiveNativeAttempt(sessionId) !== params.handle) {
+  const attachment = getEmbeddedRunAttachment(params.handle);
+  if (
+    !sessionId ||
+    !attachment ||
+    attachment.sessionId !== sessionId ||
+    !isCurrentEmbeddedRunAttachment(attachment)
+  ) {
     return false;
   }
-  const abandonedParams = { ...params, runId: params.handle.runId };
-  clearEmbeddedRunAbandonment({ ...abandonedParams, sessionId });
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedParams.sessionFile);
-  const abandonedRun: AbandonedEmbeddedRun = {
+  const owner = attachment.operation
+    ? getSessionControllerEntryForOperation(attachment.operation)
+    : sessionId;
+  clearEmbeddedRunAbandonment(owner, params);
+  const sessionKey = (params.sessionKey ?? attachment.sessionKey)?.trim();
+  const sessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
+  const runId = params.handle.runId?.trim();
+  ABANDONED_EMBEDDED_RUNS.set(owner, {
     sessionId,
-    ...(abandonedParams.runId?.trim() ? { runId: abandonedParams.runId.trim() } : {}),
+    ...(runId ? { runId } : {}),
     abandonedAtMs: Date.now(),
-    reason: abandonedParams.reason,
-    ...(abandonedParams.sessionKey?.trim()
-      ? { sessionKey: abandonedParams.sessionKey.trim() }
-      : {}),
-    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
-  };
-  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
-  if (abandonedRun.sessionKey) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
-  }
-  if (abandonedRun.sessionFile) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
-  }
+    reason: params.reason,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(sessionFile ? { sessionFile } : {}),
+  });
   return true;
 }
 
-export function resolveEmbeddedRunAbandonment(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  sessionFile?: string;
-}): AbandonedEmbeddedRun["reason"] | undefined {
-  const normalizedSessionId = params.sessionId?.trim();
-  const normalizedSessionKey = params.sessionKey?.trim();
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
-  const sessionIds = [
-    normalizedSessionId,
-    normalizedSessionKey
-      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
-      : undefined,
-    normalizedSessionFile
-      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile)
-      : undefined,
-  ];
-  const reasons = new Set(
-    sessionIds.map((sessionId) =>
-      sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason : undefined,
-    ),
+export function resolveEmbeddedRunAbandonment(
+  params: AbandonmentQuery,
+): AbandonedEmbeddedRun["reason"] | undefined {
+  const query = { ...params, sessionFile: normalizeSessionFileRegistryKey(params.sessionFile) };
+  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(
+    ([owner, abandoned]) =>
+      (!query.sessionFile || abandoned.sessionFile === query.sessionFile) &&
+      matchesAbandonment(owner, abandoned, query),
   );
-  return reasons.has("timeout")
-    ? "timeout"
-    : reasons.has("recovering_timeout")
-      ? "recovering_timeout"
-      : undefined;
+  return matches.length === 1 ? matches[0]![1].reason : undefined;
 }
 
 /**
@@ -198,10 +199,19 @@ export function resolveEmbeddedRunAbandonment(params: {
 export function markEmbeddedRunRecoveringTimeout(params: {
   sessionId: string;
   runId?: string;
+  operation?: ReplyOperation;
 }): EmbeddedRunTimeoutRecoveryMarker | undefined {
-  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(params.sessionId.trim());
+  const matches = params.operation
+    ? [ABANDONED_EMBEDDED_RUNS.get(getSessionControllerEntryForOperation(params.operation))]
+    : [...ABANDONED_EMBEDDED_RUNS.values()].filter(
+        (abandoned) =>
+          abandoned.sessionId === params.sessionId.trim() &&
+          (!abandoned.runId || abandoned.runId === params.runId?.trim()),
+      );
+  const abandoned = matches.length === 1 ? matches[0] : undefined;
   if (
     !abandoned ||
+    abandoned.sessionId !== params.sessionId.trim() ||
     abandoned.reason !== "timeout" ||
     (abandoned.runId && abandoned.runId !== params.runId?.trim())
   ) {
@@ -215,11 +225,13 @@ export function markEmbeddedRunRecoveringTimeout(params: {
 export function restoreEmbeddedRunTimeoutAbandonment(
   marker: EmbeddedRunTimeoutRecoveryMarker,
 ): boolean {
-  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(marker.sessionId.trim());
-  if (abandoned !== marker || abandoned.reason !== "recovering_timeout") {
+  if (
+    marker.reason !== "recovering_timeout" ||
+    ![...ABANDONED_EMBEDDED_RUNS.values()].includes(marker)
+  ) {
     return false;
   }
-  abandoned.reason = "timeout";
+  marker.reason = "timeout";
   return true;
 }
 
@@ -952,7 +964,10 @@ export function attachActiveEmbeddedRun(
     revokeCompletionClaim(sessionId, handle.runId);
     throw error;
   }
-  clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
+  clearEmbeddedRunAbandonment(
+    operation ? getSessionControllerEntryForOperation(operation) : sessionId,
+    { sessionId, sessionKey, sessionFile },
+  );
   if (operation && getAttachedBackend(operation) !== handle) {
     if (hasNativeBackendControl(handle)) {
       operation.attachBackend(handle);

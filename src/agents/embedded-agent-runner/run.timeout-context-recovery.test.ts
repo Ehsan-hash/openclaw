@@ -3,6 +3,7 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   reserveSessionControllerSource,
@@ -15,6 +16,7 @@ import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compact
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import {
+  attachActiveEmbeddedRun,
   markActiveEmbeddedRunAbandoned,
   markEmbeddedRunRecoveringTimeout,
   resolveEmbeddedRunAbandonment,
@@ -294,12 +296,19 @@ describe("timeout recovery", () => {
     };
     const abandon = (runId: string) => {
       const handle = createEmbeddedRunHandle({ runId });
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      const operation = createReplyOperation({
+        sessionId,
+        sessionKey,
+        target,
+        resetTriggered: false,
+      });
+      attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
       expect(
         markActiveEmbeddedRunAbandoned({ sessionId, handle, sessionKey, reason: "timeout" }),
       ).toBe(true);
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      const marker = markEmbeddedRunRecoveringTimeout({ sessionId, runId });
+      operation.complete();
+      const marker = markEmbeddedRunRecoveringTimeout({ sessionId, runId, operation });
       expect(marker).toBeDefined();
       return marker!;
     };
@@ -309,6 +318,7 @@ describe("timeout recovery", () => {
       getRuntimeConfig: () => ({}),
       getRequesterSessionActivity: () => ({
         sessionId,
+        target,
         isActive: isSessionRunActive(sessionId),
       }),
       loadRequesterSessionEntry: (requestedKey) => ({
@@ -318,6 +328,29 @@ describe("timeout recovery", () => {
         agentId: "main",
       }),
     });
+    const otherTarget = captureSessionTarget({
+      storeScope: "/tmp/other-workspace/openclaw-agent.sqlite",
+      sessionKey,
+      incarnation: sessionId,
+    });
+    const otherOperation = createReplyOperation({
+      sessionId,
+      sessionKey,
+      target: otherTarget,
+      resetTriggered: false,
+    });
+    const otherHandle = createEmbeddedRunHandle({ runId: "other-store-timeout" });
+    attachActiveEmbeddedRun(sessionId, otherHandle, sessionKey, undefined, "main", otherOperation);
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId,
+        sessionKey,
+        handle: otherHandle,
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    clearActiveEmbeddedRun(sessionId, otherHandle, sessionKey);
+    otherOperation.complete();
     abandon("run-timeout");
     // Delivery is recorded once and never retried (c6ecb5f9f2a), so a recovering requester
     // receives the completion through one dispatch that waits in its mailbox.
@@ -327,6 +360,7 @@ describe("timeout recovery", () => {
     });
     await expect(sendCompletion()).resolves.toMatchObject({ delivered: true, path: "direct" });
     expect(dispatchGatewayMethodInProcess).toHaveBeenCalledOnce();
+    expect(resolveEmbeddedRunAbandonment({ sessionKey, target: otherTarget })).toBe("timeout");
     expect(dispatchGatewayMethodInProcess.mock.calls[0]?.[0]).toBe("agent");
     dispatchGatewayMethodInProcess.mockClear();
     const queueMessage = vi.fn(async () => undefined);

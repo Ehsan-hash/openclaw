@@ -12,11 +12,13 @@ import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { createReplyOperation, isSessionRunActive } from "../../sessions/session-controller.js";
 import { isSessionRunCompactionBlocked } from "../../sessions/session-controller.queries.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
 import {
   captureSessionControllerStop,
   stopSession,
 } from "../../sessions/session-controller.stop.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
@@ -32,6 +34,8 @@ import {
   captureEmbeddedRunDrainTarget,
   isEmbeddedAgentRunHandleActive,
   markActiveEmbeddedRunAbandoned,
+  markEmbeddedRunRecoveringTimeout,
+  restoreEmbeddedRunTimeoutAbandonment,
   prepareEmbeddedAgentRunCompletionClaim,
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunOwnerByRunId,
@@ -471,6 +475,79 @@ describe("embedded run ownership", () => {
       runsB.detachActiveEmbeddedRun(sessionId, replacement, sessionKey);
       operation.complete();
     }
+  });
+
+  it("keeps timeout recovery and successor cleanup with their physical owner", async () => {
+    const makeOwner = (store: string, id = sessionId) => {
+      const target = captureSessionTarget({ storeScope: store, sessionKey, incarnation: id });
+      const operation = createReplyOperation({
+        sessionId: id,
+        sessionKey,
+        target,
+        resetTriggered: false,
+      });
+      const handle = createRunHandle({ runId: `${store}:${id}` });
+      const file = `${store}/session.jsonl`;
+      setDetachedEmbeddedRun(id, handle, sessionKey, file, undefined, operation);
+      return { target, operation, handle, file };
+    };
+    const a = makeOwner("/tmp/timeout-owner-a");
+    const b = makeOwner("/tmp/timeout-owner-b");
+    const abandon = (owner: typeof a) =>
+      markActiveEmbeddedRunAbandoned({
+        sessionId: owner.operation.sessionId,
+        sessionKey,
+        sessionFile: owner.file,
+        handle: owner.handle,
+        reason: "timeout",
+      });
+    const observation = (owner: typeof a) =>
+      resolveEmbeddedRunAbandonment({
+        sessionId: owner.operation.sessionId,
+        sessionKey,
+        target: owner.target,
+      });
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+    expect(abandon(a)).toBe(true);
+    expect(observation(a)).toBe("timeout");
+    expect(observation(b)).toBeUndefined();
+    expect(abandon(b)).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId })).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionFile: a.file })).toBe("timeout");
+    expect(resolveEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile: a.file })).toBe(
+      "timeout",
+    );
+    expect(
+      markEmbeddedRunRecoveringTimeout({
+        sessionId: "different-incarnation",
+        runId: a.handle.runId,
+        operation: a.operation,
+      }),
+    ).toBeUndefined();
+    expect(observation(a)).toBe("timeout");
+    const marker = markEmbeddedRunRecoveringTimeout({
+      sessionId,
+      runId: a.handle.runId,
+      operation: a.operation,
+    });
+    expect(marker).toBeDefined();
+    expect(observation(a)).toBe("recovering_timeout");
+    expect(observation(b)).toBe("timeout");
+    expect(markEmbeddedRunRecoveringTimeout({ sessionId })).toBeUndefined();
+    const retiredEntry = getSessionControllerEntryForOperation(a.operation);
+    clearActiveEmbeddedRun(sessionId, a.handle, sessionKey, a.file);
+    a.operation.complete();
+    await a.operation.ownerSettlement;
+    const successor = makeOwner("/tmp/timeout-owner-a", "successor");
+    expect(getSessionControllerEntryForOperation(successor.operation)).not.toBe(retiredEntry);
+    expect(observation(successor)).toBeUndefined();
+    expect(observation(b)).toBe("timeout");
+    expect(restoreEmbeddedRunTimeoutAbandonment(marker!)).toBe(false);
+    expect(abandon(a)).toBe(false);
+    const bMarker = markEmbeddedRunRecoveringTimeout({ sessionId, runId: b.handle.runId });
+    expect(bMarker).toBeDefined();
+    expect(restoreEmbeddedRunTimeoutAbandonment(bMarker!)).toBe(true);
+    expect(observation(b)).toBe("timeout");
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {

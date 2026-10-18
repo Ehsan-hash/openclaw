@@ -1,9 +1,7 @@
 import { waitForSessionControllerSettlement } from "../../sessions/session-controller.lifecycle-observation.js";
 import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import {
-  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
-  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
-  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
+  ABANDONED_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -78,9 +76,7 @@ export function createEmbeddedRunsTestApi(clearActiveEmbeddedRun: ClearActiveEmb
       EMBEDDED_RUN_COMPLETION_CLAIMS.clear();
       ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
       ACTIVE_EMBEDDED_RUNS_BY_FILE.clear();
-      ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
-      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
-      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
+      ABANDONED_EMBEDDED_RUNS.clear();
     },
   };
 }

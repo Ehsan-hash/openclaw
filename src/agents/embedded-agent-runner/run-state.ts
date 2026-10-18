@@ -10,6 +10,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type {
   ReplyOperation,
+  SessionControllerEntry,
   EmbeddedAgentQueueHandle,
   EmbeddedRunRegistration,
   EmbeddedRunAttachment,
@@ -74,9 +75,7 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   completionClaims: new Map<string, EmbeddedRunCompletionClaim>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   runsByFile: new Map<string, ActiveEmbeddedRunAttachment>(),
-  abandonedRunsBySessionId: new Map<string, AbandonedEmbeddedRun>(),
-  abandonedRunSessionIdsByKey: new Map<string, string>(),
-  abandonedRunSessionIdsByFile: new Map<string, string>(),
+  abandonedRuns: new Map<SessionControllerEntry | string, AbandonedEmbeddedRun>(),
   // The exact handle owns forced cleanup so a stale session id cannot release a replacement turn.
   forcedTerminalSettlements: new WeakMap<EmbeddedAgentQueueHandle, () => Promise<void>>(),
 }));
@@ -364,11 +363,7 @@ export function resolveRegisteredEmbeddedRunRecoveryBlocker(
 export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
 export const ACTIVE_EMBEDDED_RUNS_BY_FILE = embeddedRunState.runsByFile;
 
-export const ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID = embeddedRunState.abandonedRunsBySessionId;
-export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
-  embeddedRunState.abandonedRunSessionIdsByKey;
-export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
-  embeddedRunState.abandonedRunSessionIdsByFile;
+export const ABANDONED_EMBEDDED_RUNS = embeddedRunState.abandonedRuns;
 export const EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS = embeddedRunState.forcedTerminalSettlements;
 
 function evictPriorLifecycleEmbeddedRuns(): void {

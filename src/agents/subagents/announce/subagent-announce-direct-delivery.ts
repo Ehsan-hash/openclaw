@@ -254,6 +254,7 @@ async function sendSubagentAnnounceDirectlyBound(
       ? resolveEmbeddedRunAbandonment({
           sessionKey: canonicalRequesterSessionKey,
           sessionId: requesterActivity.sessionId,
+          target: requesterActivity.target,
         })
       : undefined;
     if (requesterAbandonment === "timeout") {
