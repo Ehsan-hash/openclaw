@@ -254,6 +254,60 @@ describe("generated redaction hints", () => {
     expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
   });
 
+  it("redacts generated plugin array secrets across every snapshot projection", () => {
+    const hints = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "array-proof",
+          configSchema: {
+            type: "object",
+            additionalProperties: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  value: { type: "string" },
+                },
+              },
+            },
+          },
+          configUiHints: { "*": { sensitive: true } },
+          configSecretInputPaths: ["entries[].value"],
+        },
+      ],
+      cache: false,
+    }).uiHints;
+    const config = {
+      plugins: {
+        entries: {
+          "array-proof": {
+            config: {
+              entries: [{ value: "synthetic-plugin-array-secret" }],
+            },
+          },
+        },
+      },
+    };
+    const raw = JSON.stringify(config);
+    const result = redactConfigSnapshot(makeSnapshot(config, raw), hints);
+    const expected = {
+      plugins: {
+        entries: {
+          "array-proof": {
+            config: {
+              entries: [{ value: REDACTED_SENTINEL }],
+            },
+          },
+        },
+      },
+    };
+
+    expectProjections(result, expected);
+    expect(result.raw).toBe(JSON.stringify(expected));
+    expect(JSON.stringify(result)).not.toContain("synthetic-plugin-array-secret");
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
   it("preserves account SecretRef identity via generated channel metadata hints", () => {
     const hints = buildConfigSchemaCore().uiHints;
     expect(hints["channels.matrix.accounts.*.password"]?.sensitive).toBe(true);

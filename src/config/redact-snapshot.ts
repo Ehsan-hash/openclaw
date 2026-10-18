@@ -199,9 +199,11 @@ function redactValue(
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
-      ? ([path, wildcardPath].find(
-          (entry) => context.lookup?.has(entry) && context.hints?.[entry]?.sensitive === true,
-        ) ?? [path, wildcardPath].find((entry) => context.lookup?.has(entry)))
+      ? typeof value === "string"
+        ? ([path, wildcardPath].find(
+            (entry) => context.lookup?.has(entry) && context.hints?.[entry]?.sensitive === true,
+          ) ?? [path, wildcardPath].find((entry) => context.lookup?.has(entry)))
+        : [path, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
     if (
       candidate &&
@@ -608,9 +610,11 @@ function restoreRedactedValue(
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
-      ? ([path, wildcardPath].find(
-          (entry) => context.lookup?.has(entry) && context.hints?.[entry]?.sensitive === true,
-        ) ?? [path, wildcardPath].find((entry) => context.lookup?.has(entry)))
+      ? typeof value === "string"
+        ? ([path, wildcardPath].find(
+            (entry) => context.lookup?.has(entry) && context.hints?.[entry]?.sensitive === true,
+          ) ?? [path, wildcardPath].find((entry) => context.lookup?.has(entry)))
+        : [path, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
     const hintPaths = [path, wildcardPath];
     // Match redaction: explicit false disables name guessing, not URL credential protection.
