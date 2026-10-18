@@ -6504,6 +6504,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           ensureOpenClawModelsJson(cfg, discoveryAgentDir, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
+            onProviderCatalogOutcome: ({ provider, status, rejectionScope }) =>
+              logProgress(
+                `[all-models] provider catalog outcome ${JSON.stringify({ provider, status, rejectionScope })}`,
+              ),
           }),
           "[all-models] prepare models.json",
         );
