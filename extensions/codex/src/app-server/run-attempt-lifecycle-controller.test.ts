@@ -287,7 +287,7 @@ describe("Codex terminal dynamic-tool release", () => {
       route.armTurn();
       await route.bindTurn("turn-1");
       controller.recordDynamicToolResult(terminalYieldResult(true));
-      await yieldImmediate();
+      await runtime.completion;
       expect(runtime.state.completed).toBe(true);
       expect(interrupt).toHaveBeenCalledOnce();
       const nativeCleanup = interrupt.mock.results[0]?.value;
