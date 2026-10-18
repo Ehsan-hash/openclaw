@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
   formatRecoveryOutcome,
@@ -10,8 +11,9 @@ import { isIncognitoDiagnosticSession } from "./diagnostic-session-state.js";
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
-  // Keep privacy after the diagnostic alias retires during controller recovery.
-  const incognito = isIncognitoDiagnosticSession(params);
+  // Keep privacy after the diagnostic alias retires while recovery loads or runs.
+  const incognito =
+    isIncognitoDiagnosticSession(params) || isIncognitoSessionKey(params.operation?.key);
   const reportOutcome = (outcome: StuckSessionRecoveryOutcome) => {
     if (!incognito) {
       diag.warn("stuck session recovery outcome: " + formatRecoveryOutcome(outcome));

@@ -132,13 +132,19 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
     );
   });
 
-  it.for(["returned-failure", "rejected-placement"] as const)(
-    "preserves ID-only privacy and %s outcomes after diagnostic state retirement",
-    async (scenario, { signal }) => {
+  it.for([
+    { retirement: "before-recovery", scenario: "returned-failure" },
+    { retirement: "before-recovery", scenario: "rejected-placement" },
+    { retirement: "during-placement", scenario: "returned-failure" },
+    { retirement: "during-placement", scenario: "rejected-placement" },
+  ] as const)(
+    "preserves ID-only privacy and $scenario outcomes with retirement $retirement",
+    async ({ retirement, scenario }, { signal }) => {
       const { sessionId, sessionKey, marker, state, operation, cancel } = begin(
         incognito,
         "retired",
       );
+      const stateGeneration = state.generation ?? 0;
       const placementStarted = createDeferred();
       const terminalTurn = createDeferred<string | undefined>();
       vi.spyOn(placement, "recoverTerminalSessionPlacementTurn").mockImplementationOnce(() => {
@@ -146,10 +152,15 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
         return terminalTurn.promise;
       });
       vi.setSystemTime(ageMs);
+      if (retirement === "before-recovery") {
+        retireDiagnosticSessionObservations();
+        pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
+        expect(resolveDiagnosticSessionKey({ sessionId })).toBeUndefined();
+      }
       const recovery = recoverStuckDiagnosticSession({
         sessionId,
         operation,
-        stateGeneration: state.generation ?? 0,
+        stateGeneration,
         ageMs,
         queueDepth: 1,
       });
@@ -163,8 +174,10 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
           ),
           signal,
         );
-        retireDiagnosticSessionObservations();
-        pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
+        if (retirement === "during-placement") {
+          retireDiagnosticSessionObservations();
+          pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
+        }
         expect(resolveDiagnosticSessionKey({ sessionId })).toBeUndefined();
         if (scenario === "returned-failure") {
           terminalTurn.resolve(marker);
