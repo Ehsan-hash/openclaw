@@ -378,25 +378,65 @@ describe("controller-owned execution guard", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("protects actual global capacity waits and resumes their semantic clock", async () => {
-    const { controller, getParams } = create("capacity");
+  it("keeps a queued session alive while another session's stalled global producer settles", async () => {
+    setCommandLaneConcurrency(globalLane, 1);
+    const first = create("stalled-global-owner");
+    const second = create("global-successor", undefined, {
+      sessionKey: "agent:main:global-successor",
+      sessionId: "global-successor",
+      sessionFile: "global-successor.jsonl",
+    });
+    const entered = createDeferred();
+    const raw = createDeferred();
     const queued = createDeferred();
-    setCommandLaneConcurrency(globalLane, 0);
-    const run = controller.enqueueSession(
+    const stalled = first.controller.enqueueSession(() =>
+      first.controller.enqueueGlobal(
+        async () => {
+          entered.resolve();
+          await raw.promise;
+          first.controller.throwIfAborted();
+          return { meta: { durationMs: 1 } };
+        },
+        { taskTimeoutMs: 25 },
+      ),
+    );
+    const failed = expect(stalled).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+    await entered.promise;
+    const successor = second.controller.enqueueSession(
       () =>
-        controller.enqueueGlobal(async () => ({ meta: { durationMs: 1 } }), {
+        second.controller.enqueueGlobal(async () => ({ meta: { durationMs: 1 } }), {
           onQueued: () => queued.resolve(),
         }),
       { taskTimeoutMs: 25 },
     );
-    // Observe the installed owner and actual queue through an explicit enqueue notification.
-    await queued.promise;
-    expect(getCommandLaneSnapshot(globalLane).queuedCount).toBe(1);
-    vi.setSystemTime(3_600_000);
-    await getParams().replyOperation!.watchdog.tick();
-    expect(controller.abortSignal.aborted).toBe(false);
-    setCommandLaneConcurrency(globalLane, 1);
-    await run;
+    try {
+      await queued.promise;
+      vi.setSystemTime(1_024);
+      await first.getParams().replyOperation!.watchdog.tick();
+      await second.getParams().replyOperation!.watchdog.tick();
+      expect(first.controller.abortSignal.aborted).toBe(false);
+      expect(second.controller.abortSignal.aborted).toBe(false);
+      expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+
+      vi.setSystemTime(1_025);
+      await first.getParams().replyOperation!.watchdog.tick();
+      await second.getParams().replyOperation!.watchdog.tick();
+      expect(first.controller.abortSignal.aborted).toBe(true);
+      expect(second.controller.abortSignal.aborted).toBe(false);
+      // A deadline requests cancellation; raw settlement still owns global capacity.
+      expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+      vi.setSystemTime(3_600_000);
+      await second.getParams().replyOperation!.watchdog.tick();
+      expect(second.controller.abortSignal.aborted).toBe(false);
+      raw.resolve();
+      await failed;
+      await expect(successor).resolves.toEqual({ meta: { durationMs: 1 } });
+      expect(second.controller.abortSignal.aborted).toBe(false);
+      expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
+    } finally {
+      raw.resolve();
+      await Promise.allSettled([stalled, successor]);
+    }
   });
 
   it("does not let another queued global task shield an active stalled producer or release its capacity", async () => {
