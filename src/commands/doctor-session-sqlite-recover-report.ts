@@ -14,6 +14,7 @@ import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { classifySqliteFtsIntegrityFindings } from "../infra/sqlite-fts-integrity.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
@@ -27,6 +28,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
@@ -218,6 +220,7 @@ async function recoverCorruptSqliteTargets(
       ? inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing)
       : {
           ok: false,
+          ftsOnly: false,
           error: new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
         };
     if (inspection.ok) {
@@ -229,7 +232,10 @@ async function recoverCorruptSqliteTargets(
       );
       continue;
     }
-    if (!hasDatabase || !isCanonicalAgentIndexCorruptionError(inspection.error)) {
+    if (
+      !hasDatabase ||
+      (!inspection.ftsOnly && !isCanonicalAgentIndexCorruptionError(inspection.error))
+    ) {
       reports.push(
         recoverCorruptSqliteTarget(target, sqlitePath, inspection.error, () =>
           maintenance.assertOwned(),
@@ -283,10 +289,11 @@ async function repairCanonicalIndexesForRecovery(
 function inspectSqliteForRecovery(
   sqlitePath: string,
   sourcePaths: readonly string[],
-): { ok: true } | { error: unknown; ok: false } {
+): { ok: true } | { error: unknown; ok: false; ftsOnly?: boolean } {
   let inspectionDir: string | undefined;
   let database: DatabaseSync | undefined;
   let inspectionError: unknown;
+  let ftsOnly = false;
   try {
     inspectionDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-recovery-"));
     const inspectionPath = path.join(inspectionDir, path.basename(sqlitePath));
@@ -304,6 +311,22 @@ function inspectSqliteForRecovery(
     assertSqliteIntegrity(database, inspectionPath);
   } catch (error) {
     inspectionError = error;
+    if (database) {
+      try {
+        ftsOnly = Boolean(
+          classifySqliteFtsIntegrityFindings(
+            database,
+            database
+              .prepare("PRAGMA integrity_check(2147483647)")
+              .all()
+              .map((row) => row.integrity_check),
+            OPENCLAW_AGENT_FTS_SCHEMAS,
+          ),
+        );
+      } catch {
+        // An unreadable file is never eligible for derived-index repair.
+      }
+    }
   }
   try {
     database?.close();
@@ -317,7 +340,9 @@ function inspectSqliteForRecovery(
   } catch (error) {
     inspectionError ??= error;
   }
-  return inspectionError === undefined ? { ok: true } : { error: inspectionError, ok: false };
+  return inspectionError === undefined
+    ? { ok: true }
+    : { error: inspectionError, ok: false, ftsOnly };
 }
 
 function recoverCorruptSqliteTarget(
