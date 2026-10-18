@@ -33,7 +33,7 @@ import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import {
   getEmbeddedRunAttachment,
-  getActiveNativeAttempt,
+  isCurrentEmbeddedRunAttachment,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
 } from "../run-state.js";
 import {
@@ -248,7 +248,7 @@ function prepareStream(
                       input.runAbortController.signal.aborted ||
                       input.getRunState().aborted ||
                       admission.closed ||
-                      getActiveNativeAttempt(attempt.sessionId) !== queueHandle
+                      !isCurrentRegistration()
                     ) {
                       throw new Error("Nested tool finalization is no longer current");
                     }
@@ -401,8 +401,7 @@ function prepareStream(
     runSignal: input.runAbortController.signal,
     sessionManager: activeSession.sessionManager,
     subscription,
-    isCurrent: () =>
-      getActiveNativeAttempt(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
+    isCurrent: () => isCurrentRegistration() && !input.getRunState().aborted,
     isReplaySafeTool: input.isReplaySafeTool,
     nestedToolActivityState: input.nestedToolActivityState,
   });
@@ -426,16 +425,15 @@ function prepareStream(
           : undefined;
     input.abortRun(false, abortReason);
   };
+  const isCurrentRegistration = () =>
+    registration !== undefined &&
+    isCurrentEmbeddedRunAttachment(registration) &&
+    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === registration;
   const hasCurrentRegistration = () => {
     // The session awaits transcript/question preparation after the global queue
     // check. Revalidate this exact publication and its live scope at the effect.
     registration?.toolAuthority?.assertActive();
-    return (
-      registration !== undefined &&
-      getEmbeddedRunAttachment(queueHandle) === registration &&
-      getActiveNativeAttempt(attempt.sessionId) === queueHandle &&
-      ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId)?.handle === queueHandle
-    );
+    return isCurrentRegistration();
   };
   const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
   type InputAuthority = NonNullable<
@@ -537,9 +535,7 @@ function prepareStream(
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const canApplyPermissionMode = () =>
-    admission.accepting &&
-    !input.runAbortController.signal.aborted &&
-    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId)?.handle === queueHandle;
+    admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
@@ -592,12 +588,7 @@ function prepareStream(
             // Keep recovery eligible during settlement, but stop shielding a
             // parent cancelled by Stop or bounded lane reclamation.
             return (
-              !externalAbortAccepted &&
-              !attempt.abortSignal?.aborted &&
-              registration !== undefined &&
-              getEmbeddedRunAttachment(queueHandle) === registration &&
-              getActiveNativeAttempt(attempt.sessionId) === queueHandle &&
-              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId)?.handle === queueHandle
+              !externalAbortAccepted && !attempt.abortSignal?.aborted && isCurrentRegistration()
             );
           }
           stalledModelRecoveryAccepted =
@@ -634,8 +625,7 @@ function prepareStream(
       isCurrent: () =>
         registration?.delegatedAuthority !== undefined &&
         validateAgentRunDelegatedAuthority(registration.delegatedAuthority) &&
-        getEmbeddedRunAttachment(queueHandle) === registration &&
-        getActiveNativeAttempt(attempt.sessionId) === queueHandle,
+        isCurrentRegistration(),
       trajectoryRecorder: input.trajectoryRecorder ?? null,
       clearActiveRun: () => {
         try {

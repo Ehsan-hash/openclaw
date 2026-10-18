@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createPersonalToolScreenDispatcher } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -9,8 +10,20 @@ import {
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
+import { captureActiveEmbeddedRunPersonalToolParticipants } from "../embedded-agent-runner/run-state.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  isActiveEmbeddedRunId,
+} from "../embedded-agent-runner/runs.js";
+import {
+  createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   testing,
 } from "../embedded-agent-runner/runs.test-support.js";
@@ -19,6 +32,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
+import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 import {
   attempt,
   published,
@@ -34,6 +48,108 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it("keeps personal-tool captures scoped to their controller when session IDs overlap", async () => {
+    const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
+    const withParticipants = async (
+      profileId: string,
+      run: (turn: {
+        identity: AgentRuntimeIdentity;
+        runId: string;
+        retire: () => void;
+      }) => Promise<void>,
+    ) => {
+      const runId = `participants-${profileId}`;
+      const sessionFile = `/synthetic/participants/${profileId}/session.jsonl`;
+      const config = { session: { store: `/synthetic/participants/${profileId}/sessions.json` } };
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId,
+        scopes: ["operator.read", "operator.write"],
+        gatewayAccessGrant: null,
+        modelPolicy,
+        assertCurrent() {},
+      });
+      const admission = prepareAgentRunAdmission({
+        cfg: config,
+        operatorAuthority,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        facts: {
+          agentId: "main",
+          runId,
+          ingress: { kind: "system", state: "present", boundary: "participants-test" },
+        },
+      });
+      try {
+        const admittedRunContext = await admission.admit("embedded", "participants-test");
+        const delegatedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+        if (!delegatedAuthority) {
+          throw new Error("Expected an admitted participant turn");
+        }
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          { ...attempt, config, runId, sessionFile },
+          undefined,
+          async (prepared) => {
+            const handle = createEmbeddedRunHandle({
+              runId,
+              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+            });
+            attachActiveEmbeddedRun(
+              sessionId,
+              handle,
+              sessionKey,
+              sessionFile,
+              "main",
+              prepared.replyOperation,
+            );
+            const retire = () => detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+            try {
+              await run({
+                identity: {
+                  kind: "agentRuntime",
+                  agentId: "main",
+                  sessionKey,
+                  operationalRunInstance: admittedRunContext.operationalRunInstance,
+                  delegatedAuthority: { ...delegatedAuthority, kind: "local" },
+                },
+                runId,
+                retire,
+              });
+            } finally {
+              retire();
+            }
+          },
+        );
+      } finally {
+        admission.close();
+      }
+    };
+
+    await withParticipants("alice", async (alice) => {
+      const first = captureActiveEmbeddedRunPersonalToolParticipants(alice.identity);
+      expect(first?.participants?.resolve()?.profileId).toBe("alice");
+      await withParticipants("bob", async (bob) => {
+        const second = captureActiveEmbeddedRunPersonalToolParticipants(bob.identity);
+        expect(second?.participants?.resolve()?.profileId).toBe("bob");
+        expect(() => first?.assertCurrent()).not.toThrow();
+        expect(isActiveEmbeddedRunId(alice.runId)).toBe(true);
+        expect(isActiveEmbeddedRunId(bob.runId)).toBe(true);
+
+        alice.retire();
+
+        expect(() => first?.assertCurrent()).toThrow(
+          "Personal-tool turn authority is no longer active",
+        );
+        expect(() => second?.assertCurrent()).not.toThrow();
+        expect(isActiveEmbeddedRunId(alice.runId)).toBe(false);
+        expect(isActiveEmbeddedRunId(bob.runId)).toBe(true);
+        expect(
+          captureActiveEmbeddedRunPersonalToolParticipants(bob.identity)?.participants?.resolve()
+            ?.profileId,
+        ).toBe("bob");
+      });
+    });
+  });
+
   it("binds accepted direct-turn participants before queue settlement and releases them at close", async () => {
     const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
     const releaseSteerer = vi.fn();

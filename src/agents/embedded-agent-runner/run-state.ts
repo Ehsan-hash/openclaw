@@ -137,6 +137,16 @@ export function getActiveNativeAttempt(sessionId: string): EmbeddedAgentQueueHan
   return getDetachedNativeAttachment(sessionId)?.handle;
 }
 
+/** Captured owners do not depend on an unambiguous session-ID projection. */
+export function isCurrentEmbeddedRunAttachment(attachment: ActiveEmbeddedRunAttachment): boolean {
+  return (
+    getEmbeddedRunAttachment(attachment.handle) === attachment &&
+    (attachment.operation
+      ? getControllerEmbeddedAttachment(attachment.operation) === attachment
+      : getActiveNativeAttempt(attachment.sessionId) === attachment.handle)
+  );
+}
+
 export function* nativeAttemptAttachments(): IterableIterator<ActiveEmbeddedRunAttachment> {
   for (const operation of activeSessionOperations()) {
     const attachment = getControllerEmbeddedAttachment(operation);
@@ -207,8 +217,7 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
     registration.agentId === identity.agentId &&
     handle.runId === instance.runId &&
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(instance.runId) === registration &&
-    getActiveNativeAttempt(registration.sessionId) === handle &&
-    getEmbeddedRunAttachment(handle) === registration &&
+    isCurrentEmbeddedRunAttachment(registration) &&
     registration.delegatedAuthority === delegatedAuthority &&
     registration.toolAuthority === toolAuthority;
   const assertCurrent = () => {

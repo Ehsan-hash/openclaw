@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
 import type { Context } from "../../../llm/types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -85,6 +86,78 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.clearActiveRun.mockImplementation(runs.detachActiveEmbeddedRun);
     mocks.subscribe.mockReturnValue(createCatalogSubscription());
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it("keeps exact stream owners current when physical stores share a session ID", async () => {
+    const sessionId = "shared-stream-session";
+    const runs = await vi.importActual<typeof import("../runs.js")>("../runs.js");
+    const owners = await Promise.all(
+      ["first", "second"].map(async (name) => {
+        const sessionKey = `agent:main:stream-${name}`;
+        const operation = createReplyOperation({
+          sessionId,
+          sessionKey,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope: `/synthetic/stream-${name}/sessions.sqlite`,
+            sessionKey,
+            incarnation: sessionId,
+          }),
+        });
+        operation.setPhase("running");
+        const { session } = await createTestSession();
+        const recover = vi.fn(() => true);
+        const prepared = prepareCatalogExecutor({
+          activeSession: session,
+          replyOperation: operation,
+          recoverStalledModelCall: recover,
+          sessionKey,
+          attempt: { runId: `stream-${name}`, sessionId, sessionFile: `stream-${name}.jsonl` },
+        });
+        const answer = vi.fn(async () => ({ status: "answered" }));
+        const question = registerPendingAgentQuestion({
+          questionId: `ask-stream-${name}`,
+          sessionKey,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?", options: [] }],
+          gatewayCall: { version: 2, call: answer } satisfies QuestionDispatcher,
+          answer: Promise.resolve({ status: "pending" }),
+        });
+        question.attachRegistration(Promise.resolve());
+        return { name, sessionKey, operation, session, prepared, recover, answer, question };
+      }),
+    );
+    try {
+      expect(getActiveNativeAttempt(sessionId)).toBeUndefined();
+      for (const owner of owners) {
+        await owner.prepared.queueHandle.queueMessage(`steer ${owner.name}`);
+        expect(owner.session.getSteeringMessages()).toContain(`steer ${owner.name}`);
+        await expect(
+          owner.prepared.queueHandle.claimPendingUserInputAnswer?.("continue", {
+            isInboundUserMessage: true,
+          }),
+        ).resolves.toBe(true);
+        expect(owner.answer).toHaveBeenCalledOnce();
+        expect(owner.prepared.queueHandle.recoverStalledModelCall?.()).toBe(true);
+        expect(owner.recover).toHaveBeenCalledOnce();
+      }
+      const first = owners[0]!;
+      const second = owners[1]!;
+      runs.detachActiveEmbeddedRun(sessionId, first.prepared.queueHandle);
+      await expect(first.prepared.queueHandle.queueMessage("retired")).rejects.toThrow(
+        "active session is finalizing",
+      );
+      expect(first.prepared.queueHandle.recoverStalledModelCall?.()).toBe(false);
+      await second.prepared.queueHandle.queueMessage("still current");
+      expect(second.session.getSteeringMessages()).toContain("still current");
+      expect(second.prepared.queueHandle.recoverStalledModelCall?.()).toBe(true);
+    } finally {
+      for (const owner of owners) {
+        owner.question.dispose();
+        owner.prepared.subscription.unsubscribe();
+        runs.detachActiveEmbeddedRun(sessionId, owner.prepared.queueHandle);
+        owner.operation.complete();
+      }
+    }
   });
 
   it("preserves transcript routing and run-local media trust at the subscription", () => {

@@ -61,6 +61,7 @@ import {
   embeddedRunCleanupAttachment,
   getControllerEmbeddedAttachment,
   getEmbeddedRunAttachment,
+  isCurrentEmbeddedRunAttachment,
   waitForEmbeddedRunOwnerSettlement,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   ACTIVE_EMBEDDED_RUNS_BY_FILE,
@@ -710,7 +711,7 @@ export function isActiveEmbeddedRunId(runId: string): boolean {
   return Boolean(
     handle &&
     registration &&
-    getActiveNativeAttempt(registration.sessionId) === handle &&
+    isCurrentEmbeddedRunAttachment(registration) &&
     isEmbeddedRunHandleInProgress(handle),
   );
 }
