@@ -1,16 +1,17 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { classifySqliteFtsIntegrityFindings } from "./sqlite-fts-integrity.js";
 import {
   assertSqliteIntegrity,
   assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
+  readSqliteIntegrityFindings,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityCheckOptions,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 import {
   createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
@@ -20,7 +21,11 @@ import {
   type SqliteSchemaSource,
   type SqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
-import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
+import {
+  findSqlClosingParenthesis,
+  normalizeSchemaSql,
+  quoteSqliteIdentifier,
+} from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const SQLITE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -205,10 +210,7 @@ export function repairSqliteIndexCorruption(
     () => {
       const names = new Set<string>();
       // Inspect every finding: SQLite's default 100-row limit can hide later damage.
-      const findings = Array.from(
-        database.prepare("PRAGMA integrity_check(2147483647)").iterate(),
-        (row) => row.integrity_check,
-      );
+      const findings = readSqliteIntegrityFindings(database);
       const ftsTables = classifySqliteFtsIntegrityFindings(
         database,
         findings,
@@ -281,6 +283,51 @@ export function repairSqliteIndexCorruption(
       },
     },
   );
+}
+
+/** Only exact, owned FTS definitions may treat their inverted index as derived data. */
+export function classifySqliteFtsIntegrityFindings(
+  database: DatabaseSync,
+  findings: readonly unknown[],
+  schemas: readonly string[],
+): string[] | undefined {
+  const names = new Set<string>();
+  for (const finding of findings) {
+    if (finding === "ok") {
+      continue;
+    }
+    const match =
+      typeof finding === "string"
+        ? /^malformed inverted index for FTS5 table main\.([A-Za-z_][A-Za-z0-9_]*)$/u.exec(finding)
+        : null;
+    if (!match?.[1]) {
+      return undefined;
+    }
+    names.add(match[1]);
+  }
+  if (names.size === 0) {
+    return undefined;
+  }
+  const definitions = new Map<string, Set<string | null>>();
+  for (const schema of schemas) {
+    for (const match of schema.matchAll(
+      /CREATE VIRTUAL TABLE (?:IF NOT EXISTS )?([A-Za-z_][A-Za-z0-9_]*) USING fts5\s*\(/gu,
+    )) {
+      const name = match[1]!;
+      const end = findSqlClosingParenthesis(schema, match.index + match[0].length - 1);
+      const variants = definitions.get(name) ?? new Set<string | null>();
+      variants.add(normalizeSchemaSql(schema.slice(match.index, end + 1)));
+      definitions.set(name, variants);
+    }
+  }
+  const tables = readSqliteSchemaObjects(database).filter((row) => row.type === "table");
+  for (const name of names) {
+    const sql = tables.find((row) => row.name === name)?.sql;
+    if (typeof sql !== "string" || !definitions.get(name)?.has(normalizeSchemaSql(sql))) {
+      return undefined;
+    }
+  }
+  return [...names].toSorted();
 }
 
 function assertSqliteIdentifier(identifier: string): void {

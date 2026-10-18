@@ -5,10 +5,12 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
-import { classifySqliteFtsIntegrityFindings } from "./sqlite-fts-integrity.js";
 import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
-import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
+import {
+  classifySqliteFtsIntegrityFindings,
+  repairSqliteIndexCorruption,
+} from "./sqlite-index-schema.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 

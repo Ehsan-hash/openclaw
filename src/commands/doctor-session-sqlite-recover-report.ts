@@ -14,8 +14,8 @@ import {
   resolveTargetSqliteOptions,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { classifySqliteFtsIntegrityFindings } from "../infra/sqlite-fts-integrity.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { classifySqliteFtsIntegrityFindings } from "../infra/sqlite-index-schema.js";
+import { assertSqliteIntegrity, SqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import {
   inspectSqliteRecoveryFiles,
   moveSqliteFilesAside,
@@ -308,20 +308,13 @@ function inspectSqliteForRecovery(
     database = openNodeSqliteDatabase(inspectionPath);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     database.exec("PRAGMA trusted_schema = OFF;");
-    assertSqliteIntegrity(database, inspectionPath);
+    assertSqliteIntegrity(database, inspectionPath, { allFindings: true });
   } catch (error) {
     inspectionError = error;
-    if (database) {
+    if (database && error instanceof SqliteIntegrityError && error.findings) {
       try {
         ftsOnly = Boolean(
-          classifySqliteFtsIntegrityFindings(
-            database,
-            database
-              .prepare("PRAGMA integrity_check(2147483647)")
-              .all()
-              .map((row) => row.integrity_check),
-            OPENCLAW_AGENT_FTS_SCHEMAS,
-          ),
+          classifySqliteFtsIntegrityFindings(database, error.findings, OPENCLAW_AGENT_FTS_SCHEMAS),
         );
       } catch {
         // An unreadable file is never eligible for derived-index repair.
