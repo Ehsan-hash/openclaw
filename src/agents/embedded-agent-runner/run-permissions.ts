@@ -7,16 +7,25 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
-import { getActiveNativeAttempt } from "./run-state.js";
+import {
+  getSessionControllerOperation,
+  isCurrentSessionControllerOperation,
+} from "../../sessions/session-controller.state.js";
+import type { SessionTarget } from "../../sessions/session-controller.target.js";
+import { getControllerEmbeddedAttachment } from "./run-state.js";
 import { withAuthorizedPermissionChange } from "./run/permission-change.js";
 
 /** Captures one exact live runtime; a later run must never inherit this update. */
-export function prepareEmbeddedRunPermissionChange(sessionId: string) {
-  if (!resolveSessionRunProgressState(sessionId)) {
+export function prepareEmbeddedRunPermissionChange(target: SessionTarget) {
+  const operation = getSessionControllerOperation(target.sessionKey, target);
+  if (!operation || operation.result) {
     return { kind: "idle" as const };
   }
-  const handle = getActiveNativeAttempt(sessionId);
+  const currentHandle = () =>
+    isCurrentSessionControllerOperation(operation)
+      ? getControllerEmbeddedAttachment(operation)?.handle
+      : undefined;
+  const handle = currentHandle();
   if (!handle?.applyPermissionMode) {
     return { kind: "unsupported" as const };
   }
@@ -25,9 +34,10 @@ export function prepareEmbeddedRunPermissionChange(sessionId: string) {
   const owner = handle.permissionChangeOwner;
   const authority = handle.runId ? getAgentRunContext(handle.runId)?.delegatedAuthority : undefined;
   const ownsRuntime = () => {
-    const current = getActiveNativeAttempt(sessionId);
+    const current = currentHandle();
     return (
       isAgentEventLifecycleGenerationCurrent(generation) &&
+      !operation.result &&
       (current === handle || (owner !== undefined && current?.permissionChangeOwner === owner))
     );
   };
@@ -35,7 +45,7 @@ export function prepareEmbeddedRunPermissionChange(sessionId: string) {
     kind: "active" as const,
     stop: () => {
       if (ownsRuntime()) {
-        getActiveNativeAttempt(sessionId)?.abort();
+        currentHandle()?.abort();
       }
     },
     apply: async (
@@ -55,10 +65,12 @@ export function prepareEmbeddedRunPermissionChange(sessionId: string) {
       };
       const apply = () => applyPermissionMode(mode, revoke);
       const applied = await (owner ? withAuthorizedPermissionChange(owner, mode, apply) : apply());
+      const currentOperation = getSessionControllerOperation(target.sessionKey, target);
       return (
         applied &&
         isAgentEventLifecycleGenerationCurrent(generation) &&
-        (!getActiveNativeAttempt(sessionId) || ownsRuntime())
+        (!currentOperation ||
+          (currentOperation === operation && (!currentHandle() || ownsRuntime())))
       );
     },
   };

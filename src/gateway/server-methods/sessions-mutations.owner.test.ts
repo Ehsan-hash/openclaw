@@ -2,6 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchManyParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
@@ -9,6 +13,7 @@ import {
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -19,7 +24,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -307,6 +316,62 @@ describe("sessions.patch", () => {
       expect(entry?.modelFallback?.prevThinkingLevel).toBeUndefined();
       expect(entry?.modelFallback?.prevContextWindow).toBeUndefined();
     }));
+
+  it.each([true, false])(
+    "keeps live permission changes in the selected physical store (selected active=%s)",
+    (selectedActive) =>
+      withSessionMutationState(async (state) => {
+        const sessionKey = "agent:main:physical-permission-update";
+        const sessionId = "shared-permission-session";
+        await seedEntry(state.env, sessionKey, { sessionId, permissionMode: "guarded" });
+        const storePath = resolveSessionStorePathCore(undefined, {
+          agentId: "main",
+          env: state.env,
+        });
+        const permissionHandle = () => ({
+          ...createEmbeddedRunHandle({ abort: vi.fn() }),
+          applyPermissionMode: vi.fn(async () => true),
+        });
+        const handles = [permissionHandle(), permissionHandle()];
+        const active = handles.flatMap((handle, index) => {
+          if (index === 0 && !selectedActive) {
+            return [];
+          }
+          const operation = createReplyOperation({
+            sessionId,
+            sessionKey,
+            agentId: "main",
+            resetTriggered: false,
+            target: captureSessionTarget({
+              storeScope: index === 0 ? storePath : `${storePath}.other`,
+              sessionKey,
+              agentId: "main",
+              incarnation: sessionId,
+            }),
+          });
+          attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
+          return [{ handle, operation }];
+        });
+        try {
+          const respond = await mutate("sessions.patch", {
+            key: sessionKey,
+            permissionMode: "read-only",
+          });
+          expectSuccess(respond, expect.any(Object));
+          expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("read-only");
+          expect(handles[0]!.applyPermissionMode).toHaveBeenCalledTimes(selectedActive ? 1 : 0);
+          expect(handles[1]!.applyPermissionMode).not.toHaveBeenCalled();
+          for (const handle of handles) {
+            expect(handle.abort).not.toHaveBeenCalled();
+          }
+        } finally {
+          for (const { handle, operation } of active) {
+            detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+            operation.complete();
+          }
+        }
+      }),
+  );
 
   it.each([
     { kind: "failed", message: "Permissions were saved" },

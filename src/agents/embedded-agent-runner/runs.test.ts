@@ -99,26 +99,36 @@ afterEach(() => {
 });
 
 describe("embedded run ownership", () => {
-  it.each([true, false])(
-    "fences replacement permission acknowledgements: %s",
-    async (sameOwner) => {
+  it.each([
+    { sameOwner: true, successor: false },
+    { sameOwner: false, successor: false },
+    { sameOwner: true, successor: true },
+  ])(
+    "fences replacement permission acknowledgements: same owner=$sameOwner, successor=$successor",
+    async ({ sameOwner, successor }) => {
       const completed = createDeferredCore<boolean>();
       const owner = createEmbeddedRunPermissionChanges({});
       const other = createEmbeddedRunPermissionChanges({});
-      activate({
+      const handle = {
         ...createRunHandle({ runId: "run" }),
         permissionChangeOwner: owner.forAttempt().owner,
         applyPermissionMode: () => completed.promise,
-      });
-      const change = prepareEmbeddedRunPermissionChange(sessionId);
+      };
+      const operation = setActiveEmbeddedRun(sessionId, handle);
+      const target = getSessionControllerEntryForOperation(operation).target;
+      assert(target, "expected a physical permission target");
+      const change = prepareEmbeddedRunPermissionChange(target);
       assert(change.kind === "active", "expected an active permission change");
       const acknowledgement = change.apply("full", vi.fn());
+      if (successor) {
+        clearActiveEmbeddedRun(sessionId, handle);
+      }
       activate({
         ...createRunHandle({ runId: "run" }),
         permissionChangeOwner: (sameOwner ? owner : other).forAttempt().owner,
       });
       completed.resolve(true);
-      await expect(acknowledgement).resolves.toBe(sameOwner);
+      await expect(acknowledgement).resolves.toBe(sameOwner && !successor);
       owner.close();
       other.close();
     },
@@ -126,8 +136,13 @@ describe("embedded run ownership", () => {
 
   it("rejects permissions captured by a replaced run", async () => {
     const applyPermissionMode = vi.fn(async () => true);
-    activate({ ...createRunHandle(), applyPermissionMode });
-    const change = prepareEmbeddedRunPermissionChange(sessionId);
+    const operation = setActiveEmbeddedRun(sessionId, {
+      ...createRunHandle(),
+      applyPermissionMode,
+    });
+    const target = getSessionControllerEntryForOperation(operation).target;
+    assert(target, "expected a physical permission target");
+    const change = prepareEmbeddedRunPermissionChange(target);
     assert(change.kind === "active", "expected an active permission change");
     activate();
     await expect(change.apply("full", vi.fn())).resolves.toBe(false);
