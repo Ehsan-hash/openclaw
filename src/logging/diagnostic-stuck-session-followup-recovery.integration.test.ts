@@ -41,7 +41,8 @@ describe("controller watchdog and actual followup delivery custody", () => {
     "keeps pending %s sources behind write-capable cleanup, then dispatches once",
     async (mode) => {
       const operation = begin();
-      const cancel = vi.fn();
+      const cancelled = createDeferredCore();
+      const cancel = vi.fn(() => cancelled.resolve());
       operation.attachBackend({ kind: "embedded", cancel });
       const settings: QueueSettings = { mode, debounceMs: 0, cap: 50 };
       const delivered = createDeferredCore();
@@ -62,6 +63,8 @@ describe("controller watchdog and actual followup delivery custody", () => {
         sessionId,
         ageMs: Date.now(),
       });
+      // Cold placement recovery must reach Stop before advancing its cleanup clock.
+      await cancelled.promise;
       await vi.advanceTimersByTimeAsync(60_000 - 1);
       expect(cancel).toHaveBeenCalledOnce();
       expect(operation.watchdog.decide().action).toBe("blocked");
