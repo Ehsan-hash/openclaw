@@ -752,7 +752,7 @@ describe("embedded run ownership", () => {
     }
   });
 
-  it("publishes completion authority and fences later session owners", async () => {
+  it("publishes completion authority and fences later turns of the same session", async () => {
     const first = createRunHandle({ runId: "first" });
     const oldClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "first");
     let published = false;
@@ -777,16 +777,16 @@ describe("embedded run ownership", () => {
     await expect(oldClaim.registered).resolves.toEqual({
       toolAuthority: expect.objectContaining({ source: "reply" }),
     });
-    clearActiveEmbeddedRun(sessionId, first);
+    clearActiveEmbeddedRun(sessionId, first, sessionKey);
     const intervening = createRunHandle({ runId: "intervening" });
-    setActiveEmbeddedRun(sessionId, intervening);
-    clearActiveEmbeddedRun(sessionId, intervening);
+    setActiveEmbeddedRun(sessionId, intervening, sessionKey);
+    clearActiveEmbeddedRun(sessionId, intervening, sessionKey);
     expect(oldClaim.claimCompletion()).toBe(false);
     const next = createRunHandle({ runId: "next" });
     const currentClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "next");
-    setActiveEmbeddedRun(sessionId, next);
+    setActiveEmbeddedRun(sessionId, next, sessionKey);
     await expect(currentClaim.registered).resolves.toBeUndefined();
-    clearActiveEmbeddedRun(sessionId, next);
+    clearActiveEmbeddedRun(sessionId, next, sessionKey);
     expect(currentClaim.claimCompletion()).toBe(true);
     expect(currentClaim.claimCompletion()).toBe(false);
   });
