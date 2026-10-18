@@ -580,8 +580,8 @@ export async function withParkedNativeTask(
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
-      .mockImplementation((sessionId, runId) => {
-        const claim = prepare(sessionId, runId);
+      .mockImplementation((sessionId, runId, target) => {
+        const claim = prepare(sessionId, runId, target);
         if (sessionId === SESSION_ID && deadline === undefined) {
           // Workspace and session preparation precede the registration owner's lifetime.
           phase = "waiting for embedded registration";

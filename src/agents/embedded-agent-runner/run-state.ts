@@ -28,6 +28,7 @@ import {
   getSessionControllerEntryForOperation,
   getAttachedBackend,
 } from "../../sessions/session-controller.state.js";
+import type { SessionTarget } from "../../sessions/session-controller.target.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 export {
@@ -47,6 +48,9 @@ export type EmbeddedRunCompletionRegistration = {
 };
 
 export type EmbeddedRunCompletionClaim = {
+  sessionId: string;
+  target?: SessionTarget;
+  attachment?: ActiveEmbeddedRunAttachment;
   runId: string;
   operation?: ReplyOperation;
   lifecycleGeneration: string;
@@ -72,7 +76,7 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRunsByRunId: new Map<string, ActiveEmbeddedRunAttachment>(),
   // Talk prepares before registration; only the matching live run promotes this
   // one-shot final-delivery claim. Replacement or lifecycle rotation revokes it.
-  completionClaims: new Map<string, EmbeddedRunCompletionClaim>(),
+  completionClaims: new Set<EmbeddedRunCompletionClaim>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   runsByFile: new Map<string, ActiveEmbeddedRunAttachment>(),
   abandonedRuns: new Map<SessionControllerEntry | string, AbandonedEmbeddedRun>(),
@@ -404,10 +408,10 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(runId);
     }
   }
-  for (const [sessionId, claim] of EMBEDDED_RUN_COMPLETION_CLAIMS) {
+  for (const claim of EMBEDDED_RUN_COMPLETION_CLAIMS) {
     if (!isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)) {
       claim.settleRegistration(undefined);
-      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
+      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     }
   }
   for (const [key, attachment] of ACTIVE_EMBEDDED_RUNS_BY_FILE) {

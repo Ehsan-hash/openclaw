@@ -281,14 +281,15 @@ export function createTalkClientAgentConsultRunner(params: {
             };
             assertConsultCurrent();
             assertRunCurrent();
+            const target = captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: canonicalKey,
+              agentId,
+              incarnation: sessionId,
+            });
             const registration = params.ownerConnId
               ? registerChatAbortController({
-                  target: captureSessionTarget({
-                    storeScope: storePath,
-                    sessionKey: canonicalKey,
-                    agentId,
-                    incarnation: sessionId,
-                  }),
+                  target,
                   runId,
                   sessionId,
                   sessionKey: canonicalKey,
@@ -342,7 +343,11 @@ export function createTalkClientAgentConsultRunner(params: {
               if (owner) {
                 assertConsultCurrent();
                 owner.identity = { runId, sessionId };
-                owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
+                owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(
+                  sessionId,
+                  runId,
+                  target,
+                );
                 if (owner.requesterFinal) {
                   const requesterFinal = owner.requesterFinal;
                   const finalRegistration = registerRequesterFinalAttachment({

@@ -327,7 +327,7 @@ describe("embedded run registry lifecycle generations", () => {
     expect(claimCompletion()).toBe(false);
   });
 
-  it("settles completion registration only after the exact backend is published", async () => {
+  it("publishes backend completion authority and replaces two-argument claims", async () => {
     const handle = createRunHandle({
       queueMessage: vi.fn(async () => {}),
       runId: "claim-run",
@@ -358,7 +358,15 @@ describe("embedded run registry lifecycle generations", () => {
     await expect(prepared.registered).resolves.toEqual({
       toolAuthority: expect.objectContaining({ source: "reply" }),
     });
-    expect(prepared.claimCompletion()).toBe(true);
+    clearActiveEmbeddedRun("claim-session", handle, "agent:main:main");
+    const replacement = prepareEmbeddedAgentRunCompletionClaim("claim-session", "next-run");
+    expect(prepared.claimCompletion()).toBe(false);
+    const nextHandle = createRunHandle({ runId: "next-run" });
+    setActiveEmbeddedRun("claim-session", nextHandle, "agent:main:main");
+    clearActiveEmbeddedRun("claim-session", nextHandle, "agent:main:main");
+    await expect(replacement.registered).resolves.toBeUndefined();
+    expect(replacement.claimCompletion()).toBe(true);
+    expect(replacement.claimCompletion()).toBe(false);
   });
 
   it("does not publish completion steering readiness without a tool authority binding", async () => {

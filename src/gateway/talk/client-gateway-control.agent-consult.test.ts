@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
@@ -240,6 +244,124 @@ describe("Talk client agent consult admission", () => {
       expect(isRunCurrent).toHaveBeenCalledWith("run-talk");
     },
   );
+
+  it("keeps simultaneous same-ID consult completions with their physical stores", async () => {
+    rpcSourceTesting.clear();
+    const publish = deferred<void>();
+    const finish = deferred<void>();
+    const consults = ["a", "b"].map((name) => {
+      const runId = `run-talk-${name}`;
+      const storePath = `/tmp/talk-store-${name}/sessions.json`;
+      const runner = createOwnedRunner({
+        sessionTarget: {
+          agentId: "researcher",
+          sessionKey: "main",
+          canonicalKey: "agent:researcher:talk",
+          storePath,
+          assertCurrent: vi.fn(),
+        },
+      });
+      runner.runPrompt.adoptCompletionClaims();
+      return {
+        runId,
+        storePath,
+        runner,
+        prepared: deferred<void>(),
+        registered: deferred<void>(),
+        instance: { instanceId: `instance:${runId}`, runId },
+      };
+    });
+    mocks.createOperationalRunInstanceRef.mockImplementation(
+      (runId: string) => consults.find((consult) => consult.runId === runId)!.instance,
+    );
+    mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
+      const consult = consults.find((candidate) => candidate.storePath === params.storePath)!;
+      await params.onRunStarted?.({
+        runId: consult.runId,
+        sessionId: "session-talk",
+        timeoutMs: 60_000,
+      });
+      consult.prepared.resolve();
+      await publish.promise;
+      await params.agentRuntime.runEmbeddedAgent({
+        ...coreParams,
+        runId: consult.runId,
+        sessionTarget: { ...coreParams.sessionTarget!, storePath: consult.storePath },
+      });
+      return { text: consult.runId };
+    });
+    mocks.runEmbeddedAgentCore.mockImplementation(async (params: typeof coreParams) => {
+      const consult = consults.find((candidate) => candidate.runId === params.runId)!;
+      const operation = getCurrentSessionControllerOwner();
+      if (!operation) {
+        throw new Error("Talk consult has no controller-owned turn");
+      }
+      const handle = createEmbeddedRunHandle({ runId: consult.runId });
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          operationalRunInstance: consult.instance,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project: () => consult.runId,
+            projectAsync: async () => consult.runId,
+            assertActive: () => {},
+          }),
+        },
+        async () => {
+          const attachment = attachActiveEmbeddedRun(
+            "session-talk",
+            handle,
+            "agent:researcher:talk",
+            undefined,
+            "researcher",
+            operation,
+          );
+          consult.registered.resolve();
+          try {
+            await finish.promise;
+          } finally {
+            detachActiveEmbeddedRun(
+              "session-talk",
+              handle,
+              "agent:researcher:talk",
+              undefined,
+              "run_completed",
+              attachment,
+            );
+          }
+        },
+      );
+      return { payloads: [] };
+    });
+    const runs = consults.map(({ runner }) => runner.runPrompt({ prompt: "finish this task" }));
+    const completed = Promise.all(runs);
+    try {
+      await Promise.race([
+        Promise.all(consults.map(({ prepared }) => prepared.promise)),
+        completed,
+      ]);
+      publish.resolve();
+      await Promise.race([
+        Promise.all(consults.map(({ registered }) => registered.promise)),
+        completed,
+      ]);
+      finish.resolve();
+      await expect(completed).resolves.toEqual([{ text: "run-talk-a" }, { text: "run-talk-b" }]);
+      for (const { runner } of consults) {
+        expect(runner.runPrompt.claimAppend()).toBe(true);
+        expect(runner.runPrompt.claimAppend()).toBe(false);
+      }
+    } finally {
+      publish.resolve();
+      finish.resolve();
+      await Promise.allSettled(runs);
+      for (const { runner } of consults) {
+        runner.runPrompt.claimFailureAppend();
+      }
+    }
+  });
 
   it("waits for backend publication and projects its registered caller authority", async () => {
     const announced = deferred<void>();

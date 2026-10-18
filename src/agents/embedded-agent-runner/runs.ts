@@ -313,11 +313,31 @@ function interruptSessionTurn(operation: ReplyOperation, reason?: "restart"): bo
   }).aborted;
 }
 
-function revokeCompletionClaim(sessionId: string, runId?: string): void {
-  const claim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
-  if (claim && (runId === undefined || claim.runId === runId)) {
-    claim.settleRegistration(undefined);
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
+function completionTargetsMatch(a: SessionTarget, b: SessionTarget): boolean {
+  return (
+    sessionTargetOwnersMatch(a, b) &&
+    (a.sessionKey === b.sessionKey ||
+      a.aliases.includes(b.sessionKey) ||
+      b.aliases.includes(a.sessionKey))
+  );
+}
+
+function completionClaimTarget(claim: EmbeddedRunCompletionClaim): SessionTarget | undefined {
+  return claim.operation
+    ? getSessionControllerEntryForOperation(claim.operation).target
+    : claim.target;
+}
+
+function revokeCompletionClaim(sessionId: string, runId?: string, target?: SessionTarget): void {
+  for (const claim of EMBEDDED_RUN_COMPLETION_CLAIMS) {
+    const owner = completionClaimTarget(claim);
+    const matchesOwner = target
+      ? owner && completionTargetsMatch(owner, target)
+      : !claim.target && claim.sessionId === sessionId;
+    if (matchesOwner && (runId === undefined || claim.runId === runId)) {
+      claim.settleRegistration(undefined);
+      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
+    }
   }
 }
 
@@ -445,6 +465,7 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
 export function prepareEmbeddedAgentRunCompletionClaim(
   sessionId: string,
   runId: string,
+  target?: SessionTarget,
 ): {
   bindOperationalRunInstance: (
     instance: NonNullable<EmbeddedRunRegistration["operationalRunInstance"]>,
@@ -458,18 +479,20 @@ export function prepareEmbeddedAgentRunCompletionClaim(
     EmbeddedRunCompletionRegistration | undefined
   >();
   const claim: EmbeddedRunCompletionClaim = {
+    sessionId,
+    target,
     runId,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     promoted: false,
     settleRegistration,
   };
-  revokeCompletionClaim(sessionId);
-  EMBEDDED_RUN_COMPLETION_CLAIMS.set(sessionId, claim);
+  revokeCompletionClaim(sessionId, undefined, target);
+  EMBEDDED_RUN_COMPLETION_CLAIMS.add(claim);
   const consume = (allowUnregistered: boolean): boolean => {
-    if (EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim) {
+    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim)) {
       return false;
     }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
+    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     if (!claim.promoted) {
       claim.settleRegistration(undefined);
     }
@@ -483,7 +506,7 @@ export function prepareEmbeddedAgentRunCompletionClaim(
     instance: NonNullable<EmbeddedRunRegistration["operationalRunInstance"]>,
   ): boolean => {
     if (
-      EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim ||
+      !EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim) ||
       !isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration) ||
       instance.runId !== runId ||
       (claim.operationalRunInstance !== undefined && claim.operationalRunInstance !== instance)
@@ -495,13 +518,13 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   };
   const resolveCurrentRegistration = (): EmbeddedRunCompletionRegistration | undefined => {
     if (
-      EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim ||
+      !EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim) ||
       !isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)
     ) {
       return undefined;
     }
-    const handle = getActiveNativeAttempt(sessionId);
-    const registration = handle ? getEmbeddedRunAttachment(handle) : undefined;
+    const registration = claim.attachment;
+    const handle = registration?.handle;
     const toolAuthority = registration?.toolAuthority;
     if (
       !handle ||
@@ -517,9 +540,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
     } catch {
       return undefined;
     }
-    return EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) === claim &&
-      getActiveNativeAttempt(sessionId) === handle &&
-      getEmbeddedRunAttachment(handle) === registration &&
+    return EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim) &&
+      registration &&
+      isCurrentEmbeddedRunAttachment(registration) &&
       isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)
       ? { toolAuthority }
       : undefined;
@@ -603,7 +626,13 @@ function projectActiveEmbeddedRunOwner(
       } else {
         handle.abort();
       }
-      revokeCompletionClaim(registration.sessionId, runId);
+      revokeCompletionClaim(
+        registration.sessionId,
+        runId,
+        registration.operation
+          ? getSessionControllerEntryForOperation(registration.operation).target
+          : undefined,
+      );
       return "aborted";
     } catch {
       // A throwing backend cannot undo cancellation already committed by its owner.
@@ -890,12 +919,15 @@ export function attachActiveEmbeddedRun(
   lifecycleGeneration = getAgentEventLifecycleGeneration(),
 ) {
   const sessionIdentity = { sessionId, sessionKey, sessionFile };
+  let completionTarget = admittedOperation
+    ? getSessionControllerEntryForOperation(admittedOperation).target
+    : undefined;
   const incomingLifecycleGeneration =
     handle[embeddedRunCleanupAttachment]?.lifecycleGeneration ?? lifecycleGeneration;
   // The immutable handle generation rejects delayed stale registration even
   // when rotation left no replacement owner in the session slot.
   if (!isAgentEventLifecycleGenerationCurrent(incomingLifecycleGeneration)) {
-    revokeCompletionClaim(sessionId, handle.runId);
+    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
     try {
       handle.abort("restart");
     } catch (error) {
@@ -905,7 +937,7 @@ export function attachActiveEmbeddedRun(
     return undefined;
   }
   if (handle.diagnosticOwner && isDiagnosticEmbeddedRunOwnerClosed(handle.diagnosticOwner)) {
-    revokeCompletionClaim(sessionId, handle.runId);
+    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
     handle.abort("restart");
     return undefined;
   }
@@ -918,10 +950,13 @@ export function attachActiveEmbeddedRun(
       handle,
     });
   } catch (error) {
-    revokeCompletionClaim(sessionId, handle.runId);
+    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
     throw error;
   }
   const operation = toolAuthority?.operation ?? admittedOperation;
+  completionTarget = operation
+    ? getSessionControllerEntryForOperation(operation).target
+    : undefined;
   if (
     admittedOperation &&
     toolAuthority?.operation &&
@@ -961,7 +996,7 @@ export function attachActiveEmbeddedRun(
   try {
     toolAuthority?.assertActive();
   } catch (error) {
-    revokeCompletionClaim(sessionId, handle.runId);
+    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
     throw error;
   }
   clearEmbeddedRunAbandonment(
@@ -1081,19 +1116,37 @@ export function attachActiveEmbeddedRun(
     runId: handle.runId,
     owner: handle.diagnosticOwner,
   });
-  const completionClaim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
-  if (
-    completionClaim &&
-    completionClaim.runId === handle.runId &&
-    completionClaim.lifecycleGeneration === incomingLifecycleGeneration &&
-    (completionClaim.operationalRunInstance === undefined ||
-      completionClaim.operationalRunInstance === operationalRunInstance)
-  ) {
-    completionClaim.operation = operation;
-    completionClaim.promoted = true;
-    completionClaim.settleRegistration(toolAuthority ? { toolAuthority } : undefined);
-  } else if (completionClaim) {
-    revokeCompletionClaim(sessionId);
+  for (const completionClaim of EMBEDDED_RUN_COMPLETION_CLAIMS) {
+    const owner = completionClaimTarget(completionClaim);
+    // Pending two-argument claims have no physical owner until admission.
+    // Promoted claims follow their operation, including compaction successors.
+    const matchesOwner = owner
+      ? completionTarget && completionTargetsMatch(owner, completionTarget)
+      : completionClaim.sessionId === sessionId;
+    if (!matchesOwner) {
+      continue;
+    }
+    const matchesSession =
+      completionClaim.sessionId === sessionId ||
+      (operation === completionClaim.operation &&
+        operation?.hasOwnedSessionId(completionClaim.sessionId) &&
+        operation.hasOwnedSessionId(sessionId));
+    if (
+      matchesSession &&
+      completionClaim.runId === handle.runId &&
+      completionClaim.lifecycleGeneration === incomingLifecycleGeneration &&
+      (completionClaim.operation === undefined || completionClaim.operation === operation) &&
+      (completionClaim.operationalRunInstance === undefined ||
+        completionClaim.operationalRunInstance === operationalRunInstance)
+    ) {
+      completionClaim.operation = operation;
+      completionClaim.attachment = attachment;
+      completionClaim.promoted = true;
+      completionClaim.settleRegistration(toolAuthority ? { toolAuthority } : undefined);
+    } else {
+      completionClaim.settleRegistration(undefined);
+      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(completionClaim);
+    }
   }
   return attachment;
 }
