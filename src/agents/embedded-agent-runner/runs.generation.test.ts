@@ -142,7 +142,7 @@ describe("embedded run registry lifecycle generations", () => {
           sessionId,
           resetTriggered: false,
         });
-        registerActiveEmbeddedRun(
+        const attachment = registerActiveEmbeddedRun(
           sessionId,
           current,
           currentKey,
@@ -150,10 +150,12 @@ describe("embedded run registry lifecycle generations", () => {
           undefined,
           operation,
         );
-        updateActiveEmbeddedRunSnapshot(sessionId, snapshot);
+        updateActiveEmbeddedRunSnapshot(attachment, snapshot);
       });
       expect(staleAbort).toHaveBeenCalledExactlyOnceWith("restart");
-      expect(getActiveEmbeddedRunSnapshot(sessionId)).toEqual({ transcriptLeafId: "current-leaf" });
+      expect(getActiveEmbeddedRunSnapshot(currentFile)).toEqual({
+        transcriptLeafId: "current-leaf",
+      });
       expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(currentFile)).toBe(sessionId);
       expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(staleFile)).toBeUndefined();
     } finally {

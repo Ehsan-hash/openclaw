@@ -782,9 +782,12 @@ function clearActiveEmbeddedRunFiles(attachment: ActiveEmbeddedRunAttachment): v
 }
 
 export function getActiveEmbeddedRunSnapshot(
-  sessionId: string,
+  sessionFile: string,
 ): ActiveEmbeddedRunSnapshot | undefined {
-  return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
+  const attachment = resolveActiveEmbeddedRunBySessionFile(sessionFile);
+  return attachment && isCurrentEmbeddedRunAttachment(attachment)
+    ? ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(attachment)
+    : undefined;
 }
 
 export type AbortAndDrainEmbeddedAgentRunResult = {
@@ -991,6 +994,7 @@ export function attachActiveEmbeddedRun(
     clearEmbeddedRunAbortability(previousHandle);
     detachNativeAttempt(previousAttachment);
     clearActiveEmbeddedRunFiles(previousAttachment);
+    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(previousAttachment);
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(previousHandle);
   }
   try {
@@ -1152,13 +1156,13 @@ export function attachActiveEmbeddedRun(
 }
 
 export function updateActiveEmbeddedRunSnapshot(
-  sessionId: string,
+  attachment: ActiveEmbeddedRunAttachment | undefined,
   snapshot: ActiveEmbeddedRunSnapshot,
 ) {
-  if (!getActiveNativeAttempt(sessionId)) {
+  if (!attachment || !isCurrentEmbeddedRunAttachment(attachment)) {
     return;
   }
-  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(attachment, snapshot);
 }
 
 export function detachActiveEmbeddedRun(
@@ -1189,6 +1193,7 @@ export function detachActiveEmbeddedRun(
   clearEmbeddedRunAbortability(handle);
   detachNativeAttempt(registration);
   clearActiveEmbeddedRunFiles(registration);
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(registration);
   notifyGatewayWorkMetricsChanged();
   if (operation && backend) {
     operation.detachBackend(backend);
@@ -1199,7 +1204,6 @@ export function detachActiveEmbeddedRun(
     if (!handle.diagnosticOwner) {
       markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     }
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     logSessionStateChange({
       sessionId,
       sessionKey,

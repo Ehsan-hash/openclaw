@@ -326,6 +326,7 @@ vi.mock("./auth-profiles/session-override.js", () => ({
 }));
 
 vi.mock("../logging/diagnostic.js", () => ({
+  logSessionStateChange: vi.fn(),
   diagnosticLogger: {
     debug: (...args: unknown[]) => diagDebugMock(...args),
   },

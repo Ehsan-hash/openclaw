@@ -77,7 +77,7 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   // Talk prepares before registration; only the matching live run promotes this
   // one-shot final-delivery claim. Replacement or lifecycle rotation revokes it.
   completionClaims: new Set<EmbeddedRunCompletionClaim>(),
-  snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
+  snapshots: new Map<ActiveEmbeddedRunAttachment, ActiveEmbeddedRunSnapshot>(),
   runsByFile: new Map<string, ActiveEmbeddedRunAttachment>(),
   abandonedRuns: new Map<SessionControllerEntry | string, AbandonedEmbeddedRun>(),
   // The exact handle owns forced cleanup so a stale session id cannot release a replacement turn.
@@ -374,7 +374,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
   const staleHandles = new Set<EmbeddedAgentQueueHandle>();
   const controllerOwnedHandles = new Set<EmbeddedAgentQueueHandle>();
   for (const attachment of nativeAttemptAttachments()) {
-    const { sessionId, handle, lifecycleGeneration } = attachment;
+    const { handle, lifecycleGeneration } = attachment;
     if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
       continue;
     }
@@ -389,11 +389,8 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     ) {
       controllerOwnedHandles.add(handle);
     }
-    const ownsSessionProjection = getActiveNativeAttempt(sessionId) === handle;
     detachNativeAttempt(attachment);
-    if (ownsSessionProjection) {
-      ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-    }
+    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(attachment);
   }
   for (const [runId, attachment] of ACTIVE_EMBEDDED_RUNS_BY_RUN_ID) {
     const { handle, lifecycleGeneration } = attachment;
