@@ -4,6 +4,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -510,6 +511,42 @@ describe("opencode-go provider plugin", () => {
 
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
   });
+
+  it.each([
+    ["openai-completions", "https://opencode.ai/inference/go/openai/v1"],
+    ["openai-responses", "https://opencode.ai/inference/go/openai/v1"],
+    ["anthropic-messages", "https://opencode.ai/inference/go/anthropic/v1"],
+    ["google-generative-ai", "https://opencode.ai/inference/go/google/v1beta"],
+  ] as const)(
+    "keeps Go client and conversation identity on migrated %s routes",
+    async (api, baseUrl) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const model = { provider: "opencode-go", id: "fixture-model", api, baseUrl };
+      for (const turnId of ["turn-1", "turn-2"]) {
+        const turnState = provider.resolveTransportTurnState?.({
+          provider: model.provider,
+          modelId: model.id,
+          model,
+          sessionId: "conversation-123",
+          turnId,
+          attempt: 1,
+          transport: "stream",
+        } as never);
+        expect(turnState?.headers).toEqual({ "x-opencode-session": "conversation-123" });
+        expect(
+          resolveProviderRequestHeaders({
+            provider: model.provider,
+            api,
+            baseUrl,
+            callerHeaders: turnState?.headers,
+          }),
+        ).toMatchObject({
+          "User-Agent": expect.stringMatching("^openclaw/"),
+          "x-opencode-session": "conversation-123",
+        });
+      }
+    },
+  );
 
   it("attaches a stable conversation id only to native OpenCode Go requests", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

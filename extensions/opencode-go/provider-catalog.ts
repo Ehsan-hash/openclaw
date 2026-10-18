@@ -136,11 +136,8 @@ export function normalizeOpencodeGoBaseUrl(params: {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === OPENCODE_GO_OPENAI_BASE_URL) {
-    return OPENCODE_GO_OPENAI_BASE_URL;
-  }
-  if (normalized === OPENCODE_GO_ANTHROPIC_BASE_URL) {
-    return OPENCODE_GO_ANTHROPIC_BASE_URL;
+  if (manifest.providerEndpoints.some(({ baseUrls }) => baseUrls.includes(normalized))) {
+    return normalized;
   }
   if (normalized === "https://opencode.ai/go") {
     return OPENCODE_GO_ANTHROPIC_BASE_URL;

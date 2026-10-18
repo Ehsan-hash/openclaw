@@ -10,7 +10,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "opencode-go-native",
-      "baseUrls": ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"]
+      "baseUrls": ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1", "https://opencode.ai/inference/go/openai/v1", "https://opencode.ai/inference/go/anthropic/v1", "https://opencode.ai/inference/go/google/v1beta"]
     }
   ],
   "providerRequest": {
