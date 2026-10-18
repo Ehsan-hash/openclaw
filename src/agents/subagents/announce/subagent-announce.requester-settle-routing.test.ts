@@ -8,6 +8,7 @@ import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-a
 import { resolveInProcessGatewaySyntheticScopes } from "../../../gateway/server-plugin-in-process-scopes.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
@@ -143,6 +144,12 @@ describe("requester settle routing and session authority", () => {
       loadRequesterSessionEntry: () => requester,
       getRequesterSessionActivity: () => ({
         sessionId: requesterIdentity.sessionId,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/requester-settle.sqlite",
+          sessionKey: requesterSessionKey,
+          agentId: requester.agentId,
+          incarnation: requesterIdentity.sessionId,
+        }),
         isActive: false,
       }),
     });

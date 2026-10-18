@@ -200,7 +200,11 @@ describe("requester settle dispatch deadline", () => {
     setSubagentAnnounceDeliveryDepsForTest({
       getRuntimeConfig: () => ({}),
       loadRequesterSessionEntry: readRequester,
-      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session",
+        target: REQUESTER_TARGET,
+        isActive: false,
+      }),
     });
     deliver.mockImplementation(sendSubagentAnnounceDirectly);
     const completeBatch = vi.fn(() => {
@@ -377,7 +381,11 @@ describe("requester settle dispatch deadline", () => {
         storePath: REQUESTER_TARGET.storeScope,
         entry: { sessionId: "requester-session", updatedAt: 1 },
       }),
-      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session",
+        target: REQUESTER_TARGET,
+        isActive: false,
+      }),
     });
     deliver.mockImplementation(sendSubagentAnnounceDirectly);
     const params = {
@@ -444,7 +452,11 @@ describe("requester settle dispatch deadline", () => {
           storePath: REQUESTER_TARGET.storeScope,
           entry: { sessionId: "requester-session", updatedAt: 1 },
         }),
-        getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session",
+          target: REQUESTER_TARGET,
+          isActive: false,
+        }),
       });
       deliver.mockImplementation(sendSubagentAnnounceDirectly);
       startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
@@ -623,7 +635,11 @@ describe("requester settle dispatch deadline", () => {
           storePath: REQUESTER_TARGET.storeScope,
           entry: { sessionId: "requester-session", updatedAt: 1 },
         }),
-        getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session",
+          target: REQUESTER_TARGET,
+          isActive: false,
+        }),
       });
       deliver.mockImplementation(sendSubagentAnnounceDirectly);
       const wake = withPluginRuntimeGatewayRequestScope(

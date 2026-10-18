@@ -7,6 +7,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import {
   createOpenClawTestState,
@@ -190,6 +191,11 @@ describe("subagent registry lifecycle error grace", () => {
         const entry = sessionStore[requesterSessionKey];
         return {
           sessionId: entry?.sessionId,
+          target: captureSessionTarget({
+            storeScope: sessionStorePath,
+            sessionKey: requesterSessionKey,
+            incarnation: entry?.sessionId,
+          }),
           isActive: false,
         };
       },

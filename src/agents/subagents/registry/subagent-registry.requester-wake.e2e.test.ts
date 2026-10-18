@@ -14,6 +14,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -286,6 +287,11 @@ describe("requester settle wake product flow", () => {
       loadSessionEntry: ({ sessionKey }) => sessionStore[sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => ({
         sessionId: sessionStore[requesterSessionKey]?.sessionId,
+        target: captureSessionTarget({
+          storeScope: sessionStorePath,
+          sessionKey: requesterSessionKey,
+          incarnation: sessionStore[requesterSessionKey]?.sessionId,
+        }),
         isActive: false,
       }),
     });

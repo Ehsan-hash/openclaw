@@ -26,6 +26,7 @@ import { createHookRunner, type HookRunner } from "../../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import * as sessionNativeRuntime from "../../../sessions/session-controller.native-runtime.js";
 import * as sessionQueries from "../../../sessions/session-controller.queries.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
@@ -364,11 +365,22 @@ const deliveryDeps = {
   ...gatewayDeps,
   loadSessionEntry: (scope) => readSessionFixture(scope.sessionKey),
   loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
+  getRequesterSessionActivity: (requesterSessionKey: string, requester) => {
     const entry = readSessionFixture(requesterSessionKey);
     const sessionId = entry?.sessionId;
     return {
       sessionId,
+      target: captureSessionTarget({
+        storeScope:
+          requester.storePath ??
+          configSessions.resolveSessionStorePathCore(configOverride.session?.store, {
+            agentId: requester.agentId ?? "main",
+          }),
+        sessionKey: requester.canonicalKey,
+        aliases: [requesterSessionKey],
+        agentId: requester.agentId,
+        incarnation: sessionId,
+      }),
       isActive: Boolean(sessionId && embeddedRunMock.isSessionRunActive(sessionId)),
     };
   },

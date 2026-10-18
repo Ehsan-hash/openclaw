@@ -113,6 +113,11 @@ describe("late exact requester recovery", () => {
       getRequesterSessionActivity: () => ({
         sessionId: initialEntry.sessionId,
         isActive: state.active,
+        target: captureSessionTarget({
+          storeScope: storePath,
+          sessionKey,
+          incarnation: initialEntry.sessionId,
+        }),
       }),
       dispatchGatewayMethodInProcess: dispatch,
       sendMessage: send,

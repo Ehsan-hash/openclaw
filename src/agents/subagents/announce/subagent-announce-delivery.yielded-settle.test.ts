@@ -1,6 +1,7 @@
 // Yielded private settle finals require completion evidence and the original requester.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
@@ -180,7 +181,15 @@ describe("yielded private settle outcomes", () => {
     onTestFinished(() => testing.setDepsForTest());
     testing.setDepsForTest({
       dispatchGatewayMethodInProcess: dispatch,
-      getRequesterSessionActivity: () => ({ sessionId: current, isActive: false }),
+      getRequesterSessionActivity: () => ({
+        sessionId: current,
+        isActive: false,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/yielded-settle/sessions.json",
+          sessionKey,
+          incarnation: current,
+        }),
+      }),
       getRuntimeConfig: () => ({ surfaces: { discord: { silentReply: { group: "allow" } } } }),
       loadRequesterSessionEntry: (key) => ({
         cfg: {},

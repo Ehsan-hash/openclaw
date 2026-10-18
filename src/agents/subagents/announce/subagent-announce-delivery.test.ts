@@ -50,6 +50,7 @@ import {
   registerDescendantWakeCurrencyTests,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
+import type { SubagentAnnounceDeliveryTestDeps } from "./subagent-announce-overrides.test-support.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
 import { createRequesterSettleCases } from "./subagent-announce-requester-settle.test-fixtures.js";
 
@@ -117,6 +118,23 @@ afterEach(() => {
   sessionDeliveryQueueMocks.releaseSessionDeliveryClaim.mockClear();
   sessionDeliveryQueueMocks.scheduleSessionDelivery.mockClear();
 });
+
+function requesterActivity(
+  sessionId: string | undefined,
+  isActive: boolean,
+): SubagentAnnounceDeliveryTestDeps["getRequesterSessionActivity"] {
+  return (sessionKey, requester) => ({
+    sessionId,
+    isActive,
+    target: captureSessionTarget({
+      storeScope: requester.storePath ?? "/synthetic/announce-delivery/sessions.json",
+      sessionKey: requester.canonicalKey,
+      aliases: [sessionKey],
+      agentId: requester.agentId,
+      incarnation: sessionId,
+    }),
+  });
+}
 
 function deliverAnnouncement(
   params: Pick<AnnouncementInput, "requesterSessionKey" | "directIdempotencyKey"> &
@@ -188,7 +206,7 @@ describe("queued completion handoff", () => {
       testing.setDepsForTest({
         dispatchGatewayMethodInProcess,
         getRuntimeConfig: () => ({}),
-        getRequesterSessionActivity: () => ({ sessionId: "busy-parent", isActive: true }),
+        getRequesterSessionActivity: requesterActivity("busy-parent", true),
       });
       let finished = false;
       const delivery = deliverAnnouncement({
@@ -378,7 +396,7 @@ type DeliveryFixtureParams = Partial<AnnouncementInput> & {
   origin?: AnnouncementInput["directOrigin"];
   requesterOrigin?: AnnouncementInput["directOrigin"];
   requesterSessionEntry?: SessionEntry;
-  requesterSessionActivity?: () => { sessionId: string; isActive: boolean };
+  requesterSessionActivity?: SubagentAnnounceDeliveryTestDeps["getRequesterSessionActivity"];
 };
 const deliveryRoutes = {
   thread: {
@@ -433,13 +451,12 @@ async function deliverFixture(
     getRuntimeConfig: () => cfg,
     getRequesterSessionActivity:
       requesterSessionActivity ??
-      (() => ({
-        sessionId:
-          currentRequesterSessionId === null
-            ? undefined
-            : (currentRequesterSessionId ?? sessionId ?? route.sessionId),
-        isActive: isActive === true,
-      })),
+      requesterActivity(
+        currentRequesterSessionId === null
+          ? undefined
+          : (currentRequesterSessionId ?? sessionId ?? route.sessionId),
+        isActive === true,
+      ),
     ...(routeName === "thread" || routeName === "telegram"
       ? {
           resolveRequesterSessionAbandonment: () => requesterAbandonment,
@@ -943,10 +960,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     testing.setDepsForTest({
       callGateway,
       dispatchGatewayMethodInProcess,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session-local",
-        isActive: false,
-      }),
+      getRequesterSessionActivity: requesterActivity("requester-session-local", false),
       getRuntimeConfig: () => cfg,
     });
 
@@ -1058,10 +1072,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     testing.setDepsForTest({
       dispatchGatewayMethodInProcess,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session-local",
-        isActive: false,
-      }),
+      getRequesterSessionActivity: requesterActivity("requester-session-local", false),
       getRuntimeConfig: () => ({}),
     });
     const result = await deliverAnnouncement({
@@ -1477,10 +1488,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const sendMessage = createSendMessageMock();
     testing.setDepsForTest({
       callGateway,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-subagent-session",
-        isActive: false,
-      }),
+      getRequesterSessionActivity: requesterActivity("requester-subagent-session", false),
       getRuntimeConfig: () => ({ messages: { groupChat: { visibleReplies: "message_tool" } } }),
       loadRequesterSessionEntry: (sessionKey) => ({
         cfg: {},
@@ -1959,7 +1967,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const sendMessage = createSendMessageMock();
     testing.setDepsForTest({
       callGateway,
-      getRequesterSessionActivity: () => ({ sessionId: "requester-session-dm", isActive: true }),
+      getRequesterSessionActivity: requesterActivity("requester-session-dm", true),
       getRuntimeConfig: () => ({}),
       sendMessage,
     });

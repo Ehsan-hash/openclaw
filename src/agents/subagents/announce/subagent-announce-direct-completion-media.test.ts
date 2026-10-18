@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
@@ -43,7 +44,17 @@ async function deliver(params: {
       }
       return { result: { payloads: params.payloads ?? [] } };
     }),
-    getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: true }),
+    getRequesterSessionActivity: (sessionKey, requester) => ({
+      sessionId: "requester-session",
+      isActive: true,
+      target: captureSessionTarget({
+        storeScope: requester.storePath ?? "/synthetic/completion-media/sessions.json",
+        sessionKey: requester.canonicalKey,
+        aliases: [sessionKey],
+        agentId: requester.agentId,
+        incarnation: "requester-session",
+      }),
+    }),
     getRuntimeConfig: () => ({}),
     sendMessage,
   });
